@@ -126,7 +126,8 @@ var SSI = function(initOptions) {
     this.options = extend({
         baseDir: '.',
         encoding: 'utf-8',
-        payload: {}
+        payload: {},
+        locations: {}
     }, initOptions || {});
 };
 
@@ -202,38 +203,54 @@ SSI.prototype = {
         async.whilst( // https://www.npmjs.org/package/async#whilst-test-fn-callback-
             function test() {return !!(matches = includeFileReg.exec(content)); },
             function insertInclude(next) {
-                seg = matches[0];
-                isVirtual = RegExp.$1 == 'virtual';
-                basePath = (isVirtual && options.dirname && RegExp.$3.charAt(0) !== '/')? options.dirname : options.baseDir;
-                tpath = path.join(basePath, RegExp.$3);
-                fs.lstat(tpath,
-                    function(err, stats) {
-                        if (err) {
-                            return next(err);
-                        }
-                        if (stats.isDirectory()) {
-                            tpath = tpath.replace(/(\/)?$/, '/index.html');
-                        }
-                        fs.readFile(tpath, {
-                                encoding: options.encoding
-                            }, function(err, innerContentRaw) {
-                                if (err) {
-                                    return next(err);
-                                }
-                                // ensure that included files can include other files with relative paths
-                                subOptions = extend({}, options, {dirname: path.dirname(tpath)});
-                                ssi.resolveIncludes(innerContentRaw, subOptions, function(err, innerContent) {
-                                    if (err) {
-                                        return next(err);
-                                    }
-                                    content = content.slice(0, matches.index) + innerContent + content.slice(matches.index + seg.length);
-                                    next(null, content);
-                                });
-                            }
-                        );
-                    }
-                );
+              seg = matches[0];
+              isVirtual = RegExp.$1 == 'virtual';
+              basePath = (isVirtual && options.dirname && RegExp.$3.charAt(0) !== '/')? options.dirname : options.baseDir;
+              tpath = path.join(basePath, RegExp.$3);
 
+              var locationMatch = Object.keys(options.locations).find(function(loc) {
+                return RegExp.$3.startsWith(loc)
+              });
+
+              if(locationMatch) {
+                var fetch = require('isomorphic-fetch');
+                fetch(options.locations[locationMatch] + RegExp.$3)
+                  .then(function(resp) { return resp.text(); })
+                  .then(function(text) {
+                    return ssi.resolveIncludes(text, options, function(err, innerContent) {
+                      if (err) { return next(err); }
+                      content = content.slice(0, matches.index) + innerContent + content.slice(matches.index + seg.length);
+                      next(null, content);
+                    });
+                  });
+              } else {
+                fs.lstat(tpath,
+                  function(err, stats) {
+                    if (err) {
+                      return next(err);
+                    }
+                    if (stats.isDirectory()) {
+                      tpath = tpath.replace(/(\/)?$/, '/index.html');
+                    }
+                    fs.readFile(tpath, {
+                      encoding: options.encoding
+                    }, function(err, innerContentRaw) {
+                      if (err) {
+                        return next(err);
+                      }
+                      // ensure that included files can include other files with relative paths
+                      subOptions = extend({}, options, {dirname: path.dirname(tpath)});
+                      ssi.resolveIncludes(innerContentRaw, subOptions, function(err, innerContent) {
+                        if (err) {
+                          return next(err);
+                        }
+                        content = content.slice(0, matches.index) + innerContent + content.slice(matches.index + seg.length);
+                        next(null, content);
+                      });
+                    });
+                  }
+                );
+              }
             },
             function includesComplete(err) {
                 if (err) {
